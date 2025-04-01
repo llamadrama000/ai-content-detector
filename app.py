@@ -4,14 +4,15 @@ from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
 from docx import Document
 from transformers import pipeline
+from pyngrok import ngrok  # For public URL
 
 app = Flask(__name__, template_folder='.', static_folder='.')
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'docx'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Load AI detection model (RoBERTa-based, fine-tuned for AI-generated text detection)
-detector = pipeline("text-classification", model="roberta-base", truncation=True, max_length=512)
+# Load AI detection model
+detector = pipeline("text-classification", model="openai-community/roberta-large-openai-detector", truncation=True, max_length=512)
 
 # Ensure upload folder exists
 if not os.path.exists(UPLOAD_FOLDER):
@@ -39,29 +40,21 @@ def extract_text_from_file(file_path: str) -> str:
                 text += para.text + '\n'
             return text
         return ''
-    except Exception as e:
-        return str(e)
+    except Exception:
+        return ''
 
 def analyze_text(text: str) -> dict:
-    # Split text into chunks if too long (max 512 tokens for RoBERTa)
-    chunk_size = 500  # Rough estimate for token limit
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    
+    chunks = [text[i:i + 500] for i in range(0, len(text), 500)]
     ai_score = 0
     total_chunks = len(chunks)
     
     for chunk in chunks:
         result = detector(chunk)[0]
-        # Assume model outputs 'POSITIVE' for AI-generated, 'NEGATIVE' for human
-        if result['label'] == 'POSITIVE':
-            ai_score += result['score']
-        else:
-            ai_score += (1 - result['score'])  # Invert score for human text
+        ai_score += result['score'] if result['label'] == 'POSITIVE' else (1 - result['score'])
     
-    # Average the scores
     ai_percentage = (ai_score / total_chunks) * 100 if total_chunks > 0 else 0
     student_percentage = 100 - ai_percentage
-    confidence = min(ai_score / total_chunks, 0.99) if total_chunks > 0 else 0.95  # Cap confidence
+    confidence = min(ai_score / total_chunks, 0.99) if total_chunks > 0 else 0.95
     
     return {
         'ai_percentage': round(ai_percentage, 2),
@@ -86,7 +79,7 @@ def index():
                 result = analyze_text(text)
             else:
                 return jsonify({'error': 'Could not extract text from file.'}), 400
-            os.remove(file_path)  # Clean up
+            os.remove(file_path)
         else:
             return jsonify({'error': 'Invalid input. Provide text or a valid file (TXT, PDF, DOCX).'}), 400
 
@@ -94,4 +87,10 @@ def index():
     return render_template('index.html', result=None)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Start Flask on port 5000
+    port = 5000
+    # Open an ngrok tunnel to make it public
+    public_url = ngrok.connect(port).public_url
+    print(f"Public URL: {public_url}")
+    # Run the app
+    app.run(host='0.0.0.0', port=port)
